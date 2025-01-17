@@ -19,10 +19,12 @@ const getNBytesOfDb = async (
     offset: 0,
   });
 
+  databaseFileHandler.close();
+
   return buffer;
 };
 
-const readVarInt = async (databaseFilePath, startOffset, toPrint = false) => {
+const readVarInt = async (databaseFilePath, startOffset) => {
   let val = 0;
   let toContinue = true;
   let bytesRead = 0;
@@ -35,9 +37,6 @@ const readVarInt = async (databaseFilePath, startOffset, toPrint = false) => {
       1
     );
     const byte = buffer.readUInt8(0);
-    if (toPrint) {
-      console.log(byte, (byte >>> 0).toString(2).padStart(8, "0"));
-    }
     bytesRead++;
 
     toContinue = byte >= 128;
@@ -128,18 +127,12 @@ if (command === ".dbinfo") {
   const cellPointerArrayOffset = 108;
   let buffer = await getNBytesOfDb(databaseFilePath, 100, 8, 8);
 
-  const pageType = buffer.readUInt8(0);
   const cellCount = buffer.readUInt16BE(3);
-  const cellContentStartOffset = buffer.readUInt16BE(5);
-
-  // console.log("CELL CONTENT STARTS AT:", cellContentStartOffset);
-  // console.log("B-TREE PAGE TYPE", pageType);
 
   const cellPointers = []; // contains offsets (relative to the start of the page)
   const cellRecordSizes = [];
   const cellRowIds = [];
   const cellRecordHeaderSizes = [];
-  const cellRecordSerialTypeCodes = [];
   const tableNames = [];
 
   buffer = await getNBytesOfDb(
@@ -179,6 +172,7 @@ if (command === ".dbinfo") {
     // console.log("RECORD ROW IDs LENGTH: ", bytesRead);
 
     let contentStartOffset = offset + totalBytesRead;
+
     // console.log("RECORD HEADER START OFFSET: ", offset + totalBytesRead);
     [recordHeaderSize, bytesRead] = await readVarInt(
       databaseFilePath,
@@ -192,13 +186,13 @@ if (command === ".dbinfo") {
 
     let contentBytesRead = 0;
 
+    // TYPE
+    let type = "";
     [serialTypeCode, bytesRead] = await readVarInt(
       databaseFilePath,
       offset + totalBytesRead
     );
     totalBytesRead += bytesRead;
-
-    let type = "";
     [type, bytesRead] = await getRecordBody(
       databaseFilePath,
       contentStartOffset + contentBytesRead,
@@ -208,19 +202,33 @@ if (command === ".dbinfo") {
     // console.log("TYPE OF RECORD: ", type);
 
     // NAME
+    let name = "";
     [serialTypeCode, bytesRead] = await readVarInt(
       databaseFilePath,
       offset + totalBytesRead
     );
     totalBytesRead += bytesRead;
-
-    let name = "";
     [name, bytesRead] = await getRecordBody(
       databaseFilePath,
       contentStartOffset + contentBytesRead,
       serialTypeCode
     );
-    tableNames.push(name);
+    contentBytesRead += bytesRead;
+
+    // TABLE NAMES
+    let tableName = "";
+    [serialTypeCode, bytesRead] = await readVarInt(
+      databaseFilePath,
+      offset + totalBytesRead
+    );
+    totalBytesRead += bytesRead;
+    [tableName, bytesRead] = await getRecordBody(
+      databaseFilePath,
+      contentStartOffset + contentBytesRead,
+      serialTypeCode
+    );
+    contentBytesRead += bytesRead;
+    tableNames.push(tableName.trim());
 
     // console.log("SERIAL TYPE CODE: ", serialTypeCode);
     // console.log("SERIAL TYPE CODE LENGTH: ", bytesRead);

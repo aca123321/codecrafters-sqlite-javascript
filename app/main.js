@@ -72,6 +72,7 @@ const getRecordBody = async (
     const tempBuffer = await getNBytesOfDb(
       databaseFilePath,
       recordBodyStartOffset,
+      contentSize,
       contentSize
     );
     content = tempBuffer.readUintBE();
@@ -81,6 +82,7 @@ const getRecordBody = async (
     const tempBuffer = await getNBytesOfDb(
       databaseFilePath,
       recordBodyStartOffset,
+      contentSize,
       contentSize
     );
     content = tempBuffer.readFloatBE();
@@ -92,6 +94,7 @@ const getRecordBody = async (
       const tempBuffer = await getNBytesOfDb(
         databaseFilePath,
         recordBodyStartOffset,
+        contentSize,
         contentSize
       );
       content = new Blob([tempBuffer]);
@@ -100,6 +103,7 @@ const getRecordBody = async (
       const tempBuffer = await getNBytesOfDb(
         databaseFilePath,
         recordBodyStartOffset,
+        contentSize,
         contentSize
       );
       content = tempBuffer.toString();

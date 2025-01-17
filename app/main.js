@@ -75,7 +75,11 @@ const getRecordBody = async (
       contentSize,
       contentSize
     );
-    content = tempBuffer.readUintBE();
+    if (serialTypeCode === 1) {
+      content = tempBuffer.readUInt8();
+    } else {
+      content = tempBuffer.readUintBE();
+    }
   } else if (serialTypeCode === 7) {
     // float
     contentSize = 8;
@@ -113,31 +117,14 @@ const getRecordBody = async (
   return [content, contentSize];
 };
 
-if (command === ".dbinfo") {
-  // You can use print statements as follows for debugging, they'll be visible when running tests.
-  const buffer = await getNBytesOfDb(databaseFilePath, 0, 108, 108);
-  console.error("Logs from your program will appear here!");
-
-  // Uncomment this to pass the first stage
-  const pageSize = buffer.readUInt16BE(16); // page size is 2 bytes starting at offset 16
-  console.log(`database page size: ${pageSize}`);
-
-  // const fileFormatWriteVersion = buffer.readUInt8(18);
-  // console.log(`database file format write version: ${fileFormatWriteVersion}`);
-
-  const cellCount = buffer.readUInt16BE(103); // cell count is 3 bytes starting from the end of file header
-  console.log(`number of tables: ${cellCount}`);
-} else if (command === ".tables") {
+const getAllTableMetadata = async () => {
   const cellPointerArrayOffset = 108;
   let buffer = await getNBytesOfDb(databaseFilePath, 100, 8, 8);
 
   const cellCount = buffer.readUInt16BE(3);
 
-  const cellPointers = []; // contains offsets (relative to the start of the page)
-  const cellRecordSizes = [];
-  const cellRowIds = [];
-  const cellRecordHeaderSizes = [];
   const tableNames = [];
+  const tableRootPages = [];
 
   buffer = await getNBytesOfDb(
     databaseFilePath,
@@ -147,10 +134,8 @@ if (command === ".dbinfo") {
   );
 
   for (let i = 0; i < cellCount; i++) {
+    // For each cell
     const offset = buffer.readUInt16BE(i * 2);
-
-    // console.log("CELL START OFFSET: ", offset);
-    cellPointers.push(offset);
 
     let recordSize = 0,
       rowId = 0,
@@ -159,86 +144,97 @@ if (command === ".dbinfo") {
       bytesRead = 0,
       totalBytesRead = 0;
 
-    [recordSize, bytesRead] = await readVarInt(
-      databaseFilePath,
-      offset + totalBytesRead
-    );
-    totalBytesRead += bytesRead;
-    cellRecordSizes.push(recordSize);
-    // console.log("RECORD SIZE LENGTH: ", bytesRead);
+    let contentStartOffset = offset;
 
-    [rowId, bytesRead] = await readVarInt(
-      databaseFilePath,
-      offset + totalBytesRead
-    );
-    totalBytesRead += bytesRead;
-    cellRowIds.push(rowId);
-    // console.log("RECORD ROW IDs LENGTH: ", bytesRead);
-
-    let contentStartOffset = offset + totalBytesRead;
-
-    // console.log("RECORD HEADER START OFFSET: ", offset + totalBytesRead);
-    [recordHeaderSize, bytesRead] = await readVarInt(
-      databaseFilePath,
-      offset + totalBytesRead
-    );
-    totalBytesRead += bytesRead;
-    cellRecordHeaderSizes.push(recordHeaderSize);
-    // console.log("RECORD HEADER SIZE: ", recordHeaderSize);
-    // console.log("RECORD HEADER SIZE LENGTH: ", bytesRead);
-    contentStartOffset += recordHeaderSize;
+    for (let i = 0; i < 3; i++) {
+      let content;
+      [content, bytesRead] = await readVarInt(
+        databaseFilePath,
+        offset + totalBytesRead
+      );
+      totalBytesRead += bytesRead;
+      switch (i) {
+        case 0:
+          recordSize = content;
+          break;
+        case 1:
+          rowId = content;
+          contentStartOffset += totalBytesRead;
+          break;
+        case 2:
+          recordHeaderSize = content;
+          contentStartOffset += recordHeaderSize;
+          break;
+        default:
+          break;
+      }
+    }
 
     let contentBytesRead = 0;
-
-    // TYPE
-    let type = "";
-    [serialTypeCode, bytesRead] = await readVarInt(
-      databaseFilePath,
-      offset + totalBytesRead
-    );
-    totalBytesRead += bytesRead;
-    [type, bytesRead] = await getRecordBody(
-      databaseFilePath,
-      contentStartOffset + contentBytesRead,
-      serialTypeCode
-    );
-    contentBytesRead += bytesRead;
-    // console.log("TYPE OF RECORD: ", type);
-
-    // NAME
-    let name = "";
-    [serialTypeCode, bytesRead] = await readVarInt(
-      databaseFilePath,
-      offset + totalBytesRead
-    );
-    totalBytesRead += bytesRead;
-    [name, bytesRead] = await getRecordBody(
-      databaseFilePath,
-      contentStartOffset + contentBytesRead,
-      serialTypeCode
-    );
-    contentBytesRead += bytesRead;
-
-    // TABLE NAMES
-    let tableName = "";
-    [serialTypeCode, bytesRead] = await readVarInt(
-      databaseFilePath,
-      offset + totalBytesRead
-    );
-    totalBytesRead += bytesRead;
-    [tableName, bytesRead] = await getRecordBody(
-      databaseFilePath,
-      contentStartOffset + contentBytesRead,
-      serialTypeCode
-    );
-    contentBytesRead += bytesRead;
-    tableNames.push(tableName.trim());
-
-    // console.log("SERIAL TYPE CODE: ", serialTypeCode);
-    // console.log("SERIAL TYPE CODE LENGTH: ", bytesRead);
-    // console.log("RECORD HEADER END OFFSET: ", offset + totalBytesRead);
+    for (let i = 0; i < 4; i++) {
+      let content;
+      [serialTypeCode, bytesRead] = await readVarInt(
+        databaseFilePath,
+        offset + totalBytesRead
+      );
+      totalBytesRead += bytesRead;
+      [content, bytesRead] = await getRecordBody(
+        databaseFilePath,
+        contentStartOffset + contentBytesRead,
+        serialTypeCode
+      );
+      contentBytesRead += bytesRead;
+      switch (i) {
+        case 2: // table name of record
+          tableNames.push(content);
+          break;
+        case 3: // rowCount of table
+          tableRootPages.push(content);
+          break;
+        default:
+          break;
+      }
+    }
   }
+
+  return [tableNames, tableRootPages];
+};
+
+const getPage = async (pageNo) => {
+  let buffer = await getNBytesOfDb(databaseFilePath, 16, 2, 2); // page size is 2 bytes starting at offset 16
+  const pageSize = buffer.readUInt16BE(0);
+  const pageOffset = (pageNo - 1) * pageSize;
+
+  buffer = await getNBytesOfDb(
+    databaseFilePath,
+    pageOffset,
+    pageSize,
+    pageSize
+  );
+
+  return buffer;
+};
+
+if (command === ".dbinfo") {
+  // You can use print statements as follows for debugging, they'll be visible when running tests.
+  const buffer = await getNBytesOfDb(databaseFilePath, 0, 108, 108);
+
+  const pageSize = buffer.readUInt16BE(16); // page size is 2 bytes starting at offset 16
+  console.log(`database page size: ${pageSize}`);
+
+  const cellCount = buffer.readUInt16BE(103); // cell count is 3 bytes starting from the end of file header
+  console.log(`number of tables: ${cellCount}`);
+} else if (command === ".tables") {
+  const [tableNames, _tableRowCounts] = await getAllTableMetadata();
   console.log(tableNames.join(" "));
+} else if (command.toLowerCase().startsWith("select count(*) from ")) {
+  const tableName = command.split(" ")[3];
+  const [tableNames, tableRootPages] = await getAllTableMetadata();
+
+  const tableRootPage = tableRootPages[tableNames.indexOf(tableName)];
+  const pageBuffer = await getPage(tableRootPage);
+  const rowCount = pageBuffer.readUInt16BE(3);
+  console.log(rowCount);
 } else {
   throw `Unknown command ${command}`;
 }
